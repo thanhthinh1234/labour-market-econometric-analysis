@@ -1,0 +1,467 @@
+---
+title: 'EDA, Sample Selection Criteria, Descriptive Statistics'
+author: "Alan, Free, and Mai"
+date: "02/04/2020"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+---
+
+```{r setup, include = FALSE}
+## Course: ECON 5300
+## Purpose: Assignment 3 - Preliminary Economic Estimates
+## Date: January 28, 2020
+## Authors: Alan, Free, and Mai
+
+```
+
+```{r clear env., message = FALSE, echo = FALSE}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE))
+
+# Clear environment of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+
+```
+
+# Assignment Description
+
++ LMA Assignment 3 - Preliminary Economic Estimates
+
++ Research Questions:
+
+    - How do earnings vary by marital status?
+    - Does the marriage premium or penalty vary by gender?
+
+
+# Load Libraries
+
+```{r libraries, message = FALSE}
+# Load libraries
+library(tidyverse)
+library(stargazer)
+library(psych)
+library(corrplot)
+library(lmtest) #BGP test
+library(robustbase)
+library(sandwich) # robust SE
+
+```
+
+
+#Load and transform data
+
+```{r load data}
+# Load data
+df <- read.csv("pop_wa.csv", header = TRUE) 
+
+# create a numeric column for married status
+df <- df %>%
+  mutate(Married = ifelse(MAR == 1, 1, 0))
+
+# create a new column --unearned income
+df <- df %>%
+  mutate(UI = PINCP - PERNP)
+         
+```
+
+```{r transform dummy variables}
+# Educational Attainment
+df$NoDegree <- ifelse(df$SCHL < 15, 1, 0) 
+df$HighSchool <- ifelse(df$SCHL > 14 & df$SCHL < 20 , 1, 0) # contains GED, some college
+df$CollegeDegree <-ifelse(df$SCHL == 20 | df$SCHL == 21, 1, 0) # contains Associates and Bachelors
+df$HigherEducation <- ifelse(df$SCHL > 21, 1, 0) # contains masters and beyond
+
+# Race/Ethnicity
+df$White <- ifelse(df$RAC1P == 1, 1, 0)
+df$Black <- ifelse(df$RAC1P == 2, 1, 0)
+df$Asian <- ifelse(df$RAC1P == 6, 1, 0) # only 7.9% asian- I think that's enough?
+df$OtherRace <- ifelse(df$RAC1P == 3 | df$RAC1P == 4 | df$RAC1P == 7 | df$RAC1P == 8 | df$RAC1P == 9 | df$RAC1P == 5, 1, 0) 
+# other contains AmericanIndian, Alaska, Hawaii, OtherRace, MultipleRace, and AI.AN
+
+# recode sex to make female = 1
+df$Female <- ifelse(df$SEX == 2, 1, 0)
+
+# create age-squared
+df$AgeSQ <- df$AGEP * df$AGEP
+df$Age <- df$AGEP
+
+# interaction term with female and marriage
+df$Female.Married = df$Female * df$Married
+
+
+```
+
+## implementing selection criteria
+```{r}
+# we only want incomes, earnings, and wages to be positive so we will exclude anything less than or equal to 0 
+df_ear <- df[which(df$PERNP >= 20020 & (df$WKW == 1 | df$WKW == 2 | df$WKW == 3) & df$WKHP >= 35), ]
+
+```
+
+## Descriptive Statistics
+```{r}
+# change earnings to a better name for paper
+df_ear$Earnings <- df_ear$PERNP
+
+df <- df_ear %>%
+  select(Earnings, NoDegree, HighSchool, CollegeDegree, HigherEducation, White, Black, Asian, OtherRace, Female, Married, Female.Married, Age, AgeSQ)
+
+# uni-variate non-graphical EDA
+stargazer(df, type = "text", header = FALSE, median = TRUE)
+
+```
+
++ creating a new column named "MARRIED" 
+ 
+    - to separate a person is now "married" from others such as separated, divorced, under 15 years old, etc. 
+
++ SEX  
+ 
+    - male and female (1 and 2)
+    - the sample has almost equal proportions of males and females. Females being 50.6% of the sample 
+    
++ MARRIED  
+ 
+    - 44.2% of individuals are married, or "now married" 
+    - Others include divorced, separated, person under 15 years old, etc..
+    
++ WAGP 
+ 
+    - wages or salary income in the past 12 months
+    - average wages in the past 12 months was $32,951.53
+    - the median wages/salary income past 12 months was $10,000
+    - 25% individuals have had 0 wages/salary income
+    - individuals in this group could be in the under 15 years age group. Or they didn't earn any money but someone else in their household did
+    - There are large number of missing values (74695-61871) 12,824 which may explains individuals with zero wages
+    
++ PERNP 
+ 
+    - total person's earnings
+    - average total person's earnings is $35,570.04
+    - the median total person's earnings is $15,000
+    - as same as wages in the past 12 months, PERNP has a big gap between Median and Maximum, $821,000. These are likely outliers. 
+    - there are a big number of missing values, might explain the 25% individuals with 0 earnings
+    
++ PINCP
+ 
+    - total person's income
+    - average total person's income is $45,619.32
+    - the median total person's income is $28,600
+    - potentially have outliers with a maximum value of $1,038,000
+    - the minimum total person's income is -$5,100 (loss)
+    - 25% individuals have had a total income of $9,300, this could come from the unearned income 
+    
++ UI
+ 
+    - a new column created "Unearned Income", calculated by substrating total person's income by total person's earnings
+    - unearned income: interest, dividends and transfer payments
+    - there are obviously missing values due to missing values of PERNP and PINCP
+    - 25% - 50$ individuals do not obtain unearned income
+    - as a consequence of a large maximum value of total person's earnings and total person's income, the maximum of unearned income is $401,000
+    
+    
+# Base EDA
+
+```{r view data}
+# Generate histogram for select variable(s)
+# marital status
+par(mfrow = c(2,2))
+  hist(df$MAR,col = "orange")
+  hist(df$MARRIED, col = "orange")
+  hist(df$PERNP, col = "orange")
+  hist(df$SEX, col = "orange")
+```
+
++ Observations verified and confirmed from the above analysis
+
+    - even distribution between males and females
+    - near even distribution of married couples vs non-married
+    - earnings is skewed with a long right tail, therefore median is the best measure
+    
+
+```{r boxplot}
+# Generate boxplot for select variable(s)
+# marital status
+par(mfrow = c(2,2))
+  boxplot(df$MAR,main = "MARITAL STATUS",col = "orange")
+  boxplot(df$MARRIED,main = "MARRIED", col = "orange")
+  boxplot(df$PERNP, main = "Earnings", col = "orange")
+  boxplot(df$SEX,main = "GENDER", col = "orange")
+```
+
++ different view of the same picture we got from the histograms
+
+
+```{r barplox}
+# Generate barplot for select variable(s)
+# marital status
+par(mfrow = c(2,2))
+  barplot(table(df$MAR),main = "MARITAL STATUS",col = "orange")
+  barplot(table(df$MARRIED),main = "MARRIED", col = "orange")
+  barplot(table(df$SEX), main = "GENDER", col = "orange")
+  
+```
+
++ MARRIED
+ 
+    - slighly more non-married than married
+    
++ GENDER
+ 
+    - As seen before, almost equal distribution between male and female
+    
++ MARITAL STATUS
+ 
+    - "married" seems to have the highest proportion
+    - though, its total is lower than other categories combined
+    
+
+```{r correlation}
+df %>%
+  select(MARRIED,PERNP,PINCP) %>%
+  cor(use = "pairwise.complete.obs", method = "pearson") %>%
+  corrplot(type = "full", method = "number", diag = FALSE)
+
+```
+
++ CORRELATION
+ 
+    - Strong correlation between total person's income and total person's earnings as expected
+    - Low correlation between being married or not and total person's income/total person's earnings
+    - should not be a big concern in this case
+    
+
+```{r geom_point}
+# how does marital status look with earnings)
+df %>%
+  select(MAR,PERNP) %>%
+  ggplot(aes(x = MAR, y = PERNP)) + 
+  geom_point(color = "orange") + 
+  theme_minimal()
+
+```
+
++ Married person seems to earn the most as expected
+
+
+```{r geom}
+# how do marital status and earnings look with gender)
+df %>%
+  select(MAR,PERNP,SEX) %>%
+  ggplot(aes(x = MAR, y = PERNP, color = SEX)) + 
+  geom_point() + 
+  theme_minimal()
+
+```
+
++ Across all type of marital status, males earn more than females
+
+
+# Economic Estimates
+
+## Build models based on theoretical grounds
+```{r}
+# using PERNP as the dependent variable (Left out noDegree, Other (race) to avoid perfect multicollinearity)
+estimate_earnings <- lm(Earnings ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Married + Female + Female.Married + Age + AgeSQ , data = df)
+
+summary(estimate_earnings)
+
+```
+
++ Age +, Age^2 - 
+
+    - this means that as people get older, the effect of age on earnings gets weaker
+  
+```{r}
+# graphing the regression
+par(mfrow = c(2, 2)) # init 4 charts in 1 panel
+plot(estimate_earnings)
+
+```
+
++ as seen in the upper left, residuals seem to increase as the fitted y value increases
+
+    - the inference here is that heteroskedasticity exists
+    
+
+```{r}
+# Breusch-Pagan test
+bptest(estimate_earnings)
+
+```
+
++ our p-value is statistically significant at the 0.05 level
+
+    - this means we can reject the null hypothesis that the variance of the residuals is constant and heteroskedasticity 
+     is indeed present, confirming the results in the graphical representation
+
++ we need to rectify this, so we will make an attempt by using log earnings
+
+
+```{r}
+# log function and bp test for log earnings equation
+estimate_logearnings = lm(log(Earnings) ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Married + Female + Female.Married + Age + AgeSQ, data = df)
+
+summary(estimate_logearnings)
+
+bptest(estimate_logearnings)
+
+```
+
++ according to the Breusch-Pagan test on the log earnings model, we still have heteroskedasticity
+
+    - need to calculate robust standard errors
+
+## Subsetting Men and Women - Married and not Married
+```{r}
+# Men - Married
+df_MM <- df[which(df$Female == 0 & df$Married == 1), ]
+model_MM <- lm(log(Earnings) ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Age + AgeSQ, data = df_MM)
+summary(model_MM)
+
+vcv <- vcovHC(model_MM, type = "HC3")
+coeftest(model_MM, vcv)
+
+stargazer(df_MM, type = "text", header = FALSE, median = TRUE)
+```
+
+```{r}
+# Men - Unmarried
+df_MU <- df[which(df$Female == 0 & df$Married == 0), ]
+model_MU <- lm(log(Earnings) ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Age + AgeSQ, data = df_MU)
+summary(model_MU)
+
+vcv <- vcovHC(model_MU, type = "HC3")
+coeftest(model_MU, vcv)
+
+stargazer(df_MU, type = "text", header = FALSE, median = TRUE)
+```
+
+```{r}
+# Women - Married
+df_WM <- df[which(df$Female == 1 & df$Married == 1), ]
+model_WM <- lm(log(Earnings) ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Age + AgeSQ, data = df_WM)
+summary(model_WM)
+
+vcv <- vcovHC(model_WM, type = "HC3")
+coeftest(model_WM, vcv)
+
+stargazer(df_WM, type = "text", header = FALSE, median = TRUE)
+```
+
+```{r}
+# Women - Unmarried
+df_WU <- df[which(df$Female == 1 & df$Married == 0), ]
+model_WU <- lm(log(Earnings) ~ HighSchool + CollegeDegree + HigherEducation + White + Black + Asian + Age + AgeSQ, data = df_WU)
+summary(model_WU)
+
+vcv <- vcovHC(model_WU, type = "HC3")
+coeftest(model_WU, vcv)
+
+stargazer(df_WU, type = "text", header = FALSE, median = TRUE)
+```
+
+
+## Robust SEs
+```{r}
+# using sandwich library (HC3 is the most conservative correction)
+vcv <- vcovHC(estimate_logearnings, type = "HC3")
+
+# robust t-tests
+coeftest(estimate_logearnings, vcv)
+
+```
+
++ I use HC3 because I am unsure which version (0, 1, 2, or 3) is the best
+
+    - We get our adjusted standard errors and output
+
+
+
+
+## -- confused from here on lol ~
+
+
+```{r}
+#submodel by race
+White <- df[which(df$White ==1), ]
+Black <- df[which(df$Black ==1), ]
+Asian <- df[which(df$Asian ==1), ]
+Other <-df[which(df$Other ==1), ]
+
+LogEarnings.white <- lm(log(PERNP) ~ HighSchool + CollegeDegree + HigherEducation + MARRIED + SEX + PINCP + WAGP + AGESQ, data = White)
+LogEarnings.asian <- lm(log(PERNP) ~ HighSchool + CollegeDegree + HigherEducation + MARRIED + SEX + PINCP + WAGP + AGESQ, data = Asian)
+LogEarnings.black <- lm(log(PERNP) ~ HighSchool + CollegeDegree + HigherEducation + MARRIED + SEX + PINCP + WAGP + AGESQ, data = Black)
+LogEarnings.Other <-lm(log(PERNP) ~ HighSchool + CollegeDegree + HigherEducation + MARRIED + SEX + PINCP + WAGP + AGESQ, data = Other)
+```
+
+
+```{r}
+#BP Testing
+bptest(LogEarnings.white)
+bptest(LogEarnings.black)
+bptest(LogEarnings.asian)
+bptest(LogEarnings.Other)
+```
+
+```{r}
+#Calculate robus SE (White)
+white.robus.se<sqrt(diag(vcovHC(LogEarnings.white, type = "HC")))
+coeftest(LogEarnings.white, vcov = vcovHC(LogEarnings.white, type = "HC"))
+as.data.frame(white.robus.se)
+```
+
+```{r}
+#Calculate robus SE (Black)
+black.robus.se<sqrt(diag(vcovHC(LogEarnings.black, type = "HC")))
+coeftest(LogEarnings.black, vcov = vcovHC(LogEarnings.black, type = "HC"))
+as.data.frame(black.robus.se)
+```
+
+```{r}
+#Calculate robus SE (asian)
+asian.robus.se<sqrt(diag(vcovHC(LogEarnings.asian, type = "HC")))
+coeftest(LogEarnings.asian, vcov = vcovHC(LogEarnings.asian, type = "HC"))
+as.data.frame(asian.robus.se)
+```
+
+```{r}
+#Calculate robus SE (other)
+other.robus.se<sqrt(diag(vcovHC(LogEarnings.Other, type = "HC")))
+coeftest(LogEarnings.Other, vcov = vcovHC(LogEarnings.Other, type = "HC"))
+as.data.frame(other.robus.se)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
